@@ -1,0 +1,8 @@
+{
+  "name": "ldxp-sync-kit",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync:local": "node scripts/local-sync.mjs"
+  }
+}
