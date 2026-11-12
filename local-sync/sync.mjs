@@ -17,6 +17,7 @@ export function parseArgs(args) {
     else if (arg === '--delete-unavailable') result.deleteUnavailable = true;
     else if (arg === '--resume') result.resume = true;
     else if (arg === '--help' || arg === '-h') result.help = true;
+    else if (arg === '--explain') result.explain = true;
     else if (arg.startsWith('--shop=')) result.shops.push(arg.slice(7));
     else if (arg.startsWith('--checkpoint=')) { result.checkpoint = path.resolve(arg.slice(13)); result.checkpointExplicit = true; }
     else if (arg.startsWith('--interval-ms=')) result.intervalMs = Number(arg.slice(14));
@@ -190,10 +191,29 @@ export async function runSync(options, deps = {}) {
   return stats;
 }
 
+/** 只输出代码实际行为；不读取密钥、不执行网络请求。 */
+export function describeWorkflow() {
+  return {
+    mode: '仅说明，不访问网络、不读取密钥、不修改数据',
+    credentials: 'INGEST_SECRET 只用于配置的目标 API 地址的 Bearer 鉴权；不向店铺源站发送。',
+    destinations: {
+      catalog: '从目标 API 的 /api/shops?fields=sync 获取店铺地址及摘要。',
+      source: '从各店铺 URL 指向的源站请求店铺信息和商品列表；pay.ldxp.cn 对应 wzyp.cn。',
+      push: '使用 --apply 时向目标 API 的 /api/ingest 推送变化快照。',
+      delete: '使用 --apply 时，源站明确报告店铺不存在会调用目标 API 的店铺删除接口；加 --delete-unavailable 时关闭交易的店铺也会删除。',
+    },
+    deletion: '删除会同时删除目标站的店铺、商品报价和历史快照；判断来自源站单次响应，可能误判。封禁和普通网络失败不删除。',
+    rate: '默认单并发，源站请求随机间隔 3～5 秒，遇限流或验证停止；多进程之间不会共享限速。',
+    defaults: '默认只预览，不写入；仅显式 --apply 才会写入或删除。脚本不会自行设置定时任务。',
+    audit: '开源代码和凭据均需使用者自行确认；不要将密钥写入仓库、日志或提示词。',
+  };
+}
+
 export async function main() {
   const options = parseArgs(process.argv.slice(2));
+  if (options.explain) { console.log(JSON.stringify(describeWorkflow(), null, 2)); return; }
   if (options.help) {
-    console.log('本地采集并推送店铺快照（默认只预览）\n用法：node local-sync/sync.mjs [--apply] [--delete-unavailable] [--resume] [--shop=店铺ID或地址末段] [--limit=数量] [--concurrency=1..8] [--interval-ms=1000以上] [--shard=序号/总数] [--checkpoint=文件]\n配置：local-sync/config.env 或 API_BASE、INGEST_SECRET 环境变量；密钥也可使用项目 .dev.vars');
+    console.log('本地采集并推送店铺快照（默认只预览）\n用法：node local-sync/sync.mjs [--explain] [--apply] [--delete-unavailable] [--resume] [--shop=店铺ID或地址末段] [--limit=数量] [--concurrency=1..8] [--interval-ms=1000以上] [--shard=序号/总数] [--checkpoint=文件]\n配置：local-sync/config.env 或 API_BASE、INGEST_SECRET 环境变量；密钥也可使用项目 .dev.vars');
     return;
   }
   const config = loadConfig();

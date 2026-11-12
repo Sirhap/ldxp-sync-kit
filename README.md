@@ -20,3 +20,9 @@ npm run sync:local -- --apply --shard=1/3 --resume # 续跑
 ```
 
 更多选项、删除行为和安全边界见 [同步说明](local-sync/README.md)。可供兼容 Agent 使用的 Skill 位于 [.agents/skills/ldxp-local-sync](.agents/skills/ldxp-local-sync/SKILL.md)。仓库不包含真实密钥或运行数据。
+
+## 执行前查看数据流
+
+运行 `npm run sync:local -- --explain` 可在不读取密钥、不访问网络的情况下查看实际请求方向、同步与删除条件。店铺状态由**店铺源站**返回，写入和删除请求发送到配置的目标站；目标站不是店铺状态的来源。
+
+`--apply` 默认会删除源站明确报告不存在的店铺；再加 `--delete-unavailable` 会删除源站报告已关闭交易的店铺。删除同时移除目标站的店铺、商品报价和历史快照，判断依赖源站单次响应。如果不希望自动删除，不应运行 `--apply`。运行前请确认目标站、代码版本和备份。定时运行的执行环境需固定代码版本并由使用者管理密钥；本工具不会自动创建定时任务。
