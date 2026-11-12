@@ -96,12 +96,12 @@ export function createRequestGate(intervalMs = 3000, { maxIntervalMs = 5000, sle
   let blocked = false;
   return {
     block() { blocked = true; },
+    cooldown(ms) { nextAt = Math.max(nextAt, now() + ms); },
     isBlocked() { return blocked; },
     before() {
       const job = queue.then(async () => {
         if (blocked) { const error = new Error('已触发源站风控，停止本轮'); error.isRateLimited = true; throw error; }
-        const wait = Math.max(0, nextAt - now());
-        if (wait) await sleep(wait);
+        while (nextAt > now()) await sleep(nextAt - now());
         if (blocked) { const error = new Error('已触发源站风控，停止本轮'); error.isRateLimited = true; throw error; }
         nextAt = now() + intervalMs + Math.floor(random() * (maxIntervalMs - intervalMs + 1));
       });
@@ -203,7 +203,7 @@ export function describeWorkflow() {
       delete: '使用 --apply 时，源站明确报告店铺不存在会调用目标 API 的店铺删除接口；加 --delete-unavailable 时关闭交易的店铺也会删除。',
     },
     deletion: '删除会同时删除目标站的店铺、商品报价和历史快照；判断来自源站单次响应，可能误判。封禁和普通网络失败不删除。',
-    rate: '默认单并发，源站请求随机间隔 3～5 秒，遇限流或验证停止；多进程之间不会共享限速。',
+    rate: '默认单并发、随机间隔 3～5 秒；风控最多重试 2 次，遵守 Retry-After，持续受限则停止。多进程不共享限速。',
     defaults: '默认只预览，不写入；仅显式 --apply 才会写入或删除。脚本不会自行设置定时任务。',
     audit: '开源代码和凭据均需使用者自行确认；不要将密钥写入仓库、日志或提示词。',
   };

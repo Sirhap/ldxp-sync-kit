@@ -195,10 +195,20 @@ async function responseHint(response) {
   } catch { return ''; }
 }
 
+/** Retry-After 可为秒数或 HTTP 日期；无效值不影响默认退避。 */
+export function parseRetryAfter(value, now = Date.now()) {
+  if (!value) return 0;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - now) : 0;
+}
+
 async function postJson(url, body, retries = 1, options = {}) {
   const origin = new URL(url).origin;
   let lastError;
   let solvedWafOnce = false;
+  let riskRetries = 0;
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
@@ -226,7 +236,7 @@ async function postJson(url, body, retries = 1, options = {}) {
         const err = new Error(`源站请求受限或暂时不可用 HTTP ${res.status}${hint ? `，提示：${hint}` : ""}`);
         err.isRateLimited = true;
         err.origin = origin;
-        options.requestGate?.block();
+        err.retryAfterMs = parseRetryAfter(res.headers.get("retry-after"));
         throw err;
       }
       if (!res.ok) {
@@ -253,7 +263,7 @@ async function postJson(url, body, retries = 1, options = {}) {
         if (options.requestGate || preview.includes("var arg1=") || preview.includes("Just a moment")) {
           err.isRateLimited = true;
           err.origin = origin;
-          options.requestGate?.block();
+          err.retryAfterMs = parseRetryAfter(res.headers.get("retry-after"));
         }
         throw err;
       }
@@ -263,12 +273,23 @@ async function postJson(url, body, retries = 1, options = {}) {
         const err = new Error(`源站提示请求受限 HTTP ${res.status}，提示：${safeSourceMessage(message) || "（空）"}`);
         err.isRateLimited = true;
         err.origin = origin;
-        options.requestGate.block();
+        err.retryAfterMs = parseRetryAfter(res.headers.get("retry-after"));
         throw err;
       }
       return data;
     } catch (err) {
       if (err?.isRateLimited) {
+        if (options.requestGate && riskRetries < 2) {
+          const delay = Math.max(60000 * (2 ** riskRetries), err.retryAfterMs || 0);
+          if (delay <= 900000) {
+            riskRetries += 1;
+            console.warn(`[push-sync] ${err.message}；等待 ${Math.ceil(delay / 1000)} 秒后重试（${riskRetries}/2）`);
+            options.requestGate.cooldown(delay);
+            attempt -= 1;
+            continue;
+          }
+        }
+        options.requestGate?.block();
         throw err;
       }
       lastError = err;
