@@ -455,7 +455,8 @@ export async function fetchShopApiSnapshot(shop, options = {}) {
   if (infoRes.code !== 1 || !infoRes.data) {
     const message = String(infoRes.msg || `info 接口失败 (code=${infoRes.code})`);
     const error = new Error(message);
-    if (/^(?:店铺链接不存在|店铺不存在|商家已被关闭交易)(?:[，,。！？：:\s]|$)/.test(message)) error.shopUnavailable = true;
+    if (/^(?:店铺链接不存在|店铺不存在)(?:[，,。！？：:\s]|$)/.test(message)) error.shopUnavailable = "not_found";
+    else if (/^商家已被关闭交易(?:[，,。！？：:\s]|$)/.test(message)) error.shopUnavailable = "closed";
     throw error;
   }
   const defaultCardPage1 = await postJson(`${apiOrigin}/shopApi/Shop/goodsList`, {

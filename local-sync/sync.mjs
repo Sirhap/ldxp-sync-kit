@@ -166,7 +166,7 @@ export async function runSync(options, deps = {}) {
         if (options.apply) { state.completed[shop.id] = shop.shopUrl; saveCheckpoint(options.checkpoint, state); }
         console.log(`[local-sync] ${shop.id}: ${unchanged ? '未变化' : options.apply ? '已推送' : '有变化'}`);
       } catch (error) {
-        if (error?.shopUnavailable && options.apply && options.deleteUnavailable) {
+        if (options.apply && (error?.shopUnavailable === 'not_found' || (error?.shopUnavailable === 'closed' && options.deleteUnavailable))) {
           try {
             const result = await remove(shop);
             if (result?.deleted !== true || result.shopId !== shop.id) throw new Error('删除结果未确认');
