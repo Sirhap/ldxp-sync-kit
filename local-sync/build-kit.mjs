@@ -14,6 +14,7 @@ const files = [
   'scripts/lib/snapshotHash.mjs', 'scripts/lib/shopApiHelpers.mjs',
   'src/config/brand-rules.json', '.agents/skills/ldxp-local-sync/SKILL.md',
   '.agents/skills/ldxp-local-sync/agents/openai.yaml',
+  'tests/local-sync.node-check.mjs', 'tests/risk-retry.test.mjs', 'tests/workflow.test.mjs',
 ];
 try {
   for (const relative of files) {
@@ -21,7 +22,9 @@ try {
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.copyFileSync(path.join(root, relative), dest);
   }
-  fs.writeFileSync(path.join(kit, 'package.json'), JSON.stringify({ name: 'ldxp-sync-kit', private: true, type: 'module', scripts: { 'sync:local': 'node scripts/local-sync.mjs' } }, null, 2) + '\n');
+  fs.copyFileSync(path.join(root, 'local-sync/README.md'), path.join(kit, 'README.md'));
+  if (fs.existsSync(path.join(root, 'LICENSE'))) fs.copyFileSync(path.join(root, 'LICENSE'), path.join(kit, 'LICENSE'));
+  fs.writeFileSync(path.join(kit, 'package.json'), JSON.stringify({ name: 'ldxp-sync-kit', private: true, type: 'module', scripts: { 'sync:local': 'node scripts/local-sync.mjs', test: 'node --test tests/*.test.mjs tests/local-sync.node-check.mjs' } }, null, 2) + '\n');
   fs.writeFileSync(path.join(kit, '.gitignore'), 'local-sync/config.env\n.dev.vars\noutput/\n');
   fs.mkdirSync(path.join(root, 'output'), { recursive: true });
   const archive = path.join(root, 'output', 'ldxp-sync-kit.tar.gz');

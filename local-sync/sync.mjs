@@ -31,7 +31,7 @@ export function parseArgs(args) {
     else throw new Error(`未知参数: ${arg}`);
   }
   if (!Number.isInteger(result.concurrency) || result.concurrency < 1 || result.concurrency > 8) throw new Error('并发数必须为 1–8');
-  if (result.intervalMs !== null && (!Number.isInteger(result.intervalMs) || result.intervalMs < 1000)) throw new Error('请求间隔至少为 1000 毫秒');
+  if (result.intervalMs !== null && (!Number.isInteger(result.intervalMs) || result.intervalMs < 500)) throw new Error('请求间隔至少为 500 毫秒');
   if (!Number.isInteger(result.shardCount) || result.shardCount < 1 || result.shardCount > 256 || !Number.isInteger(result.shardIndex) || result.shardIndex < 1 || result.shardIndex > result.shardCount) throw new Error('分片范围无效（1 ≤ 序号 ≤ 总数 ≤ 256）');
   if (!result.checkpointExplicit && result.shardCount > 1) result.checkpoint = path.join(root, 'output', `local-sync-checkpoint-${result.shardIndex}-of-${result.shardCount}.json`);
   if (!Number.isInteger(result.limit) || result.limit < 0) throw new Error('limit 必须是非负整数');
@@ -79,7 +79,14 @@ function saveCheckpoint(file, state) {
 
 async function jsonFetch(url, options = {}) {
   const response = await fetch(url, { ...options, signal: AbortSignal.timeout(30000), redirect: 'error' });
-  if (!response.ok) { const error = new Error(`HTTP ${response.status}`); error.status = response.status; throw error; }
+  if (!response.ok) {
+    const error = new Error(`HTTP ${response.status}`); error.status = response.status;
+    if ((response.headers.get('content-type') || '').includes('application/json')) {
+      const data = await response.json().catch(() => null);
+      error.shopNotFound = response.status === 404 && data?.error === '店铺不存在';
+    }
+    throw error;
+  }
   return response.json();
 }
 
@@ -90,7 +97,7 @@ export function shardForShop(shopId, total) {
 
 /** 为整个进程的源站请求串行调度，发现风控后阻止后续请求。 */
 export function createRequestGate(intervalMs = 3000, { maxIntervalMs = 5000, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random = Math.random, now = Date.now } = {}) {
-  if (!Number.isInteger(intervalMs) || intervalMs < 1000 || !Number.isInteger(maxIntervalMs) || maxIntervalMs < intervalMs) throw new Error("请求间隔范围无效：最小值至少 1000 毫秒，最大值不能小于最小值");
+  if (!Number.isInteger(intervalMs) || intervalMs < 500 || !Number.isInteger(maxIntervalMs) || maxIntervalMs < intervalMs) throw new Error("请求间隔范围无效：最小值至少 500 毫秒，最大值不能小于最小值");
   let queue = Promise.resolve();
   let nextAt = 0;
   let blocked = false;
@@ -140,7 +147,7 @@ export async function runSync(options, deps = {}) {
     state = JSON.parse(fs.readFileSync(options.checkpoint, 'utf8'));
     if (state.version !== 2 || state.apiBase !== base || JSON.stringify(state.scope) !== JSON.stringify(scope) || !state.completed || Array.isArray(state.completed) || typeof state.completed !== 'object') throw new Error('续跑记录无效或目标地址不匹配');
   } else if (options.apply) saveCheckpoint(options.checkpoint, state);
-  const stats = { total: targets.length, resumed: 0, unchanged: 0, changed: 0, pushed: 0, deleted: 0, failed: 0 };
+  const stats = { total: targets.length, resumed: 0, unchanged: 0, changed: 0, pushed: 0, deleted: 0, alreadyAbsent: 0, failed: 0, unprocessed: 0 };
   let cursor = 0;
   const blocked = new Set();
   console.log(`[local-sync] ${options.apply ? '执行推送' : '预览（不会写入）'}：${targets.length} 家，分片 ${shardIndex}/${shardCount}，并发 ${options.concurrency}，请求间隔 ${minInterval}～${maxInterval}ms，目标 ${base}`);
@@ -175,6 +182,10 @@ export async function runSync(options, deps = {}) {
             console.log(`[local-sync] ${shop.id}: 源站店铺不可用，已删除`);
             continue;
           } catch (deleteError) {
+            if (deleteError?.shopNotFound) {
+              stats.alreadyAbsent++; state.completed[shop.id] = shop.shopUrl; saveCheckpoint(options.checkpoint, state);
+              console.log(`[local-sync] ${shop.id}: 目标店铺已不存在，无需重复删除`); continue;
+            }
             if ([401, 403, 429].includes(deleteError?.status)) gate.block();
             stats.failed++; console.warn(`[local-sync] ${shop.id}: 删除失败：${deleteError instanceof Error ? deleteError.message : String(deleteError)}`); continue;
           }
@@ -186,7 +197,7 @@ export async function runSync(options, deps = {}) {
     }
   }
   await Promise.all(Array.from({ length: Math.min(options.concurrency, targets.length) }, worker));
-  if (gate.isBlocked()) { stats.failed += targets.length - cursor; console.warn(`[local-sync] 触发风控，已停止本轮；未处理 ${targets.length - cursor} 家，请勿自动重试`); }
+  if (gate.isBlocked()) { stats.unprocessed = targets.length - cursor; console.warn(`[local-sync] 触发风控，已停止本轮；未处理 ${targets.length - cursor} 家，请勿自动重试`); }
   console.log(`[local-sync] 结果 ${JSON.stringify(stats)}`);
   return stats;
 }
@@ -213,7 +224,7 @@ export async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.explain) { console.log(JSON.stringify(describeWorkflow(), null, 2)); return; }
   if (options.help) {
-    console.log('本地采集并推送店铺快照（默认只预览）\n用法：node local-sync/sync.mjs [--explain] [--apply] [--delete-unavailable] [--resume] [--shop=店铺ID或地址末段] [--limit=数量] [--concurrency=1..8] [--interval-ms=1000以上] [--shard=序号/总数] [--checkpoint=文件]\n配置：local-sync/config.env 或 API_BASE、INGEST_SECRET 环境变量；密钥也可使用项目 .dev.vars');
+    console.log('本地采集并推送店铺快照（默认只预览）\n用法：node local-sync/sync.mjs [--explain] [--apply] [--delete-unavailable] [--resume] [--shop=店铺ID或地址末段] [--limit=数量] [--concurrency=1..8] [--interval-ms=500以上] [--shard=序号/总数] [--checkpoint=文件]\n配置：local-sync/config.env 或 API_BASE、INGEST_SECRET 环境变量；密钥也可使用项目 .dev.vars');
     return;
   }
   const config = loadConfig();

@@ -78,7 +78,7 @@ test('稳定分片覆盖每家店且不会重叠，参数防止过快请求', ()
   assert.equal(new Set(shards.flat()).size, ids.length);
   assert.ok(shards.every(group => group.length > 0));
   assert.deepEqual(ids.map(id => shardForShop(id, 4)), [...ids].map(id => shardForShop(id, 4)));
-  assert.throws(() => parseArgs(['--interval-ms=100']), /1000/);
+  assert.throws(() => parseArgs(['--interval-ms=100']), /500/);
   assert.throws(() => parseArgs(['--shard=3/2']), /分片范围/);
   assert.notEqual(parseArgs(['--shard=1/2']).checkpoint, parseArgs(['--shard=2/2']).checkpoint);
 });
@@ -91,7 +91,7 @@ test('请求间隔全局串行且风控时停止后续店铺', async () => {
   const checkpoint = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'local-sync-stop-')), 'state.json');
   let collected = 0;
   const stats = await runSync(options(checkpoint, { apply: true }), { load, gate, collect: async () => { collected++; const e = new Error('风控'); e.isRateLimited = true; throw e; }, push: async () => { throw new Error('不应推送'); } });
-  assert.equal(collected, 1); assert.equal(stats.failed, 3); assert.equal(gate.isBlocked(), true);
+  assert.equal(collected, 1); assert.equal(stats.failed, 1); assert.equal(stats.unprocessed, 2); assert.equal(gate.isBlocked(), true);
   await assert.rejects(gate.before(), /停止本轮/);
 });
 
@@ -113,15 +113,15 @@ test('源站忽略请求 limit 时仍读取全部分页', async () => {
   } finally { globalThis.fetch = original; }
 });
 
-test('限制响应记录具体提示并隐藏敏感内容，不重试', async () => {
+test('限制响应记录具体提示并隐藏敏感内容，重试耗尽后停止', async () => {
   const { fetchShopApiSnapshot, safeSourceMessage } = await import('../scripts/push-sync.mjs');
-  const original = globalThis.fetch; let calls = 0; let blocked = false;
+  const original = globalThis.fetch; let calls = 0; let blocked = false; const delays = [];
   globalThis.fetch = async () => { calls++; return Response.json({ code: 0, msg: '访问频繁，请稍后再试 token=secret123' }); };
   try {
-    await assert.rejects(fetchShopApiSnapshot({ shopUrl: 'https://example.test/shop/a' }, { requestGate: { before: async () => {}, block: () => { blocked = true; } }, allowChallengeSolve: false }), (err) => {
+    await assert.rejects(fetchShopApiSnapshot({ shopUrl: 'https://example.test/shop/a' }, { requestGate: { before: async () => {}, cooldown: ms => delays.push(ms), block: () => { blocked = true; } }, allowChallengeSolve: false }), (err) => {
       assert.match(err.message, /HTTP 200/); assert.match(err.message, /访问频繁/); assert.doesNotMatch(err.message, /secret123/); return true;
     });
-    assert.equal(calls, 1); assert.equal(blocked, true);
+    assert.equal(calls, 3); assert.deepEqual(delays,[60000,120000]); assert.equal(blocked, true);
     assert.doesNotMatch(safeSourceMessage('联系 a@example.com https://x.test/?token=123'), /example.com|token=123/);
   } finally { globalThis.fetch = original; }
 });
@@ -168,4 +168,40 @@ test('关闭交易默认不删除，明确启用后才删除', async () => {
   assert.equal(first.failed, 1); assert.equal(deletes, 0);
   const second = await runSync(options(checkpoint, { apply: true, deleteUnavailable: true }), deps);
   assert.equal(second.deleted, 1); assert.equal(deletes, 1);
+});
+
+test('支持 500ms 配置并维持随机范围，低于下限拒绝', async () => {
+  assert.equal(parseArgs(['--interval-ms=500']).intervalMs,500);
+  assert.throws(()=>parseArgs(['--interval-ms=499']), /500/);
+  let clock=0; const gate=createRequestGate(500,{maxIntervalMs:750,now:()=>clock,random:()=>0,sleep:async ms=>{clock+=ms;}});
+  await gate.before();gate.cooldown(2000);await gate.before();assert.equal(clock,2000);
+  await gate.before();assert.equal(clock,2500);
+});
+
+test('不可信商品总数不能覆盖，重复页不被误认为完整', async () => {
+  const {fetchShopApiSnapshot}=await import('../scripts/push-sync.mjs'); const orig=globalThis.fetch;
+  const item={goods_key:'a',name:'test',price:10,extend:{stock_count:1}};
+  try {
+    for (const total of [undefined,null,'bad',-1,0.5,0]) {
+      globalThis.fetch=async url=>Response.json(url.endsWith('/info')?{code:1,data:{nickname:'test'}}:{code:1,data:{total,list:[item]}});
+      await assert.rejects(fetchShopApiSnapshot(shops[0]),/总数缺失或无效/);
+    }
+    let calls=0;
+    globalThis.fetch=async url=>{if(url.endsWith('/info'))return Response.json({code:1,data:{nickname:'test'}});calls++;return Response.json({code:1,data:{total:2,list:[item]}});};
+    await assert.rejects(fetchShopApiSnapshot(shops[0]),/快照不完整/);assert.equal(calls,2);
+  } finally {globalThis.fetch=orig;}
+});
+
+test('已不存在的目标删除为幂等成功，普通 404 仍失败', async () => {
+  const orig=globalThis.fetch;
+  const collect=async()=>{const e=new Error('店铺不存在');e.shopUnavailable='not_found';throw e;};
+  try {
+    for (const [message,absent] of [['店铺不存在',true],['路由不存在',false]]) {
+      const checkpoint=path.join(fs.mkdtempSync(path.join(os.tmpdir(),'sync-404-')),'state.json');
+      globalThis.fetch=async()=>Response.json({error:message},{status:404});
+      const stats=await runSync(options(checkpoint,{apply:true,secret:'test'}),{load:async()=>({shops:[shops[0]]}),collect});
+      assert.equal(stats.alreadyAbsent,absent?1:0);assert.equal(stats.failed,absent?0:1);
+      assert.equal(Boolean(JSON.parse(fs.readFileSync(checkpoint)).completed.a),absent);
+    }
+  } finally {globalThis.fetch=orig;}
 });

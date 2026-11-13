@@ -422,7 +422,12 @@ async function fetchPagedGoodsBatchLocal(apiOrigin, token, goodsType, categoryId
 
   if (!Array.isArray(page1.data.list)) throw new Error(`goodsList 数据格式错误 (type=${goodsType})`);
   const list1 = page1.data.list;
-  const expectedTotal = Math.max(0, Number(page1.data.total ?? list1.length) || 0);
+  const rawTotal = page1.data.total;
+  const expectedTotal = Number(rawTotal);
+  if (rawTotal === null || rawTotal === undefined || (typeof rawTotal === "string" && rawTotal.trim() === "") || !["string", "number"].includes(typeof rawTotal) ||
+      !Number.isSafeInteger(expectedTotal) || expectedTotal < 0 || expectedTotal < list1.length) {
+    throw new Error(`商品总数缺失或无效，拒绝不完整快照 (type=${goodsType})`);
+  }
   const collected = [];
   const seenKeys = new Set();
 
