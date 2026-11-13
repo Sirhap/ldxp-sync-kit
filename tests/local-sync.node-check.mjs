@@ -65,8 +65,8 @@ test('配置文件集中设置地址和密钥，环境变量优先且兼容旧�
   const files = { config: path.join(dir, 'config.env'), legacy: path.join(dir, 'legacy') };
   fs.writeFileSync(files.config, 'API_BASE=https://target.test\nINGEST_SECRET="configured"\n');
   fs.writeFileSync(files.legacy, 'INGEST_SECRET=legacy\n');
-  assert.deepEqual(loadConfig({}, files), { apiBase: 'https://target.test', secret: 'configured', intervalMinMs: 3000, intervalMaxMs: 5000 });
-  assert.deepEqual(loadConfig({ API_BASE: 'https://override.test', INGEST_SECRET: 'override' }, files), { apiBase: 'https://override.test', secret: 'override', intervalMinMs: 3000, intervalMaxMs: 5000 });
+  assert.deepEqual(loadConfig({}, files), { apiBase: 'https://target.test', secret: 'configured', intervalMinMs: 1000, intervalMaxMs: 2000 });
+  assert.deepEqual(loadConfig({ API_BASE: 'https://override.test', INGEST_SECRET: 'override' }, files), { apiBase: 'https://override.test', secret: 'override', intervalMinMs: 1000, intervalMaxMs: 2000 });
   fs.writeFileSync(files.config, 'API_BASE=https://target.test\nINGEST_SECRET=\n');
   assert.equal(loadConfig({}, files).secret, 'legacy');
 });
@@ -85,7 +85,7 @@ test('稳定分片覆盖每家店且不会重叠，参数防止过快请求', ()
 
 test('请求间隔全局串行且风控时停止后续店铺', async () => {
   let clock = 0;
-  const gate = createRequestGate(3000, { now: () => clock, random: () => 0, sleep: async (ms) => { clock += ms; } });
+  const gate = createRequestGate(3000, { maxIntervalMs: 5000, now: () => clock, random: () => 0, sleep: async (ms) => { clock += ms; } });
   await Promise.all([gate.before(), gate.before(), gate.before()]);
   assert.equal(clock, 6000);
   const checkpoint = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'local-sync-stop-')), 'state.json');

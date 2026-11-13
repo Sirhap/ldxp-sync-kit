@@ -10,7 +10,7 @@ cd ldxp-sync-kit
 cp local-sync/config.example.env local-sync/config.env
 ```
 
-编辑 `local-sync/config.env`，填写 `API_BASE` 和目标服务的 `INGEST_SECRET`。默认每次请求随机间隔 3～5 秒。配置文件不会提交到 Git，请勿公开密钥。
+编辑 `local-sync/config.env`，填写 `API_BASE` 和目标服务的 `INGEST_SECRET`。默认每次请求随机间隔 1～2 秒。配置文件不会提交到 Git，请勿公开密钥。
 
 ```bash
 npm run sync:local -- --shop=King                 # 预览

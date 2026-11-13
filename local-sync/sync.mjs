@@ -59,8 +59,8 @@ export function loadConfig(env = process.env, files = {}) {
   return {
     apiBase: env.API_BASE?.trim() || config.API_BASE || 'https://parity.sirhao.top',
     secret: env.INGEST_SECRET?.trim() || config.INGEST_SECRET || legacy.INGEST_SECRET || '',
-    intervalMinMs: Number(env.SYNC_INTERVAL_MIN_MS ?? (config.SYNC_INTERVAL_MIN_MS || 3000)),
-    intervalMaxMs: Number(env.SYNC_INTERVAL_MAX_MS ?? (config.SYNC_INTERVAL_MAX_MS || 5000)),
+    intervalMinMs: Number(env.SYNC_INTERVAL_MIN_MS ?? (config.SYNC_INTERVAL_MIN_MS || 1000)),
+    intervalMaxMs: Number(env.SYNC_INTERVAL_MAX_MS ?? (config.SYNC_INTERVAL_MAX_MS || 2000)),
   };
 }
 
@@ -96,7 +96,7 @@ export function shardForShop(shopId, total) {
 }
 
 /** 为整个进程的源站请求串行调度，发现风控后阻止后续请求。 */
-export function createRequestGate(intervalMs = 3000, { maxIntervalMs = 5000, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random = Math.random, now = Date.now } = {}) {
+export function createRequestGate(intervalMs = 1000, { maxIntervalMs = 2000, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random = Math.random, now = Date.now } = {}) {
   if (!Number.isInteger(intervalMs) || intervalMs < 500 || !Number.isInteger(maxIntervalMs) || maxIntervalMs < intervalMs) throw new Error("请求间隔范围无效：最小值至少 500 毫秒，最大值不能小于最小值");
   let queue = Promise.resolve();
   let nextAt = 0;
@@ -122,8 +122,8 @@ export function createRequestGate(intervalMs = 3000, { maxIntervalMs = 5000, sle
 export async function runSync(options, deps = {}) {
   const base = apiUrl(options.apiBase);
   const load = deps.load || ((url) => jsonFetch(url));
-  const minInterval = options.intervalMs ?? options.intervalMinMs ?? 3000;
-  const maxInterval = options.intervalMs != null ? options.intervalMs + 1000 : options.intervalMaxMs ?? 5000;
+  const minInterval = options.intervalMs ?? options.intervalMinMs ?? 1000;
+  const maxInterval = options.intervalMs != null ? options.intervalMs + 1000 : options.intervalMaxMs ?? 2000;
   const gate = deps.gate || createRequestGate(minInterval, { maxIntervalMs: maxInterval });
   const collect = deps.collect || ((shop) => fetchShopApiSnapshot(shop, { requestGate: gate, allowChallengeSolve: false }));
   const remove = deps.remove || ((shop) => jsonFetch(`${base}/api/admin/shops/${encodeURIComponent(shop.id)}`, { method: 'DELETE', headers: { Authorization: `Bearer ${options.secret}` } }));
@@ -214,7 +214,7 @@ export function describeWorkflow() {
       delete: '使用 --apply 时，源站明确报告店铺不存在会调用目标 API 的店铺删除接口；加 --delete-unavailable 时关闭交易的店铺也会删除。',
     },
     deletion: '删除会同时删除目标站的店铺、商品报价和历史快照；判断来自源站单次响应，可能误判。封禁和普通网络失败不删除。',
-    rate: '默认单并发、随机间隔 3～5 秒；风控最多重试 2 次，遵守 Retry-After，持续受限则停止。多进程不共享限速。',
+    rate: '默认单并发、随机间隔 1～2 秒；风控最多重试 2 次，遵守 Retry-After，持续受限则停止。多进程不共享限速。',
     defaults: '默认只预览，不写入；仅显式 --apply 才会写入或删除。脚本不会自行设置定时任务。',
     audit: '开源代码和凭据均需使用者自行确认；不要将密钥写入仓库、日志或提示词。',
   };
