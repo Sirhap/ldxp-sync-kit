@@ -15,7 +15,7 @@ const files = [
   'src/config/brand-rules.json', '.agents/skills/ldxp-local-sync/SKILL.md',
   '.agents/skills/ldxp-local-sync/agents/openai.yaml',
   'tests/local-sync.node-check.mjs', 'tests/risk-retry.test.mjs', 'tests/workflow.test.mjs',
-  'tests/snapshot-parity.test.mjs',
+  'tests/snapshot-parity.test.mjs', 'tests/sync-16688.test.mjs',
 ];
 try {
   for (const relative of files) {
