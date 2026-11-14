@@ -293,7 +293,12 @@ async function postJson(url, body, retries = 1, options = {}) {
         options.requestGate?.block();
         throw err;
       }
-      lastError = err;
+      if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+        lastError = new Error(`源站请求超时（${Math.round((options.timeoutMs ?? 8000)/1000)} 秒）`);
+      } else if (err instanceof TypeError && /fetch failed/i.test(err.message)) {
+        const code = /^[A-Z0-9_]{1,40}$/.test(String(err.cause?.code || '')) ? `（${err.cause.code}）` : '';
+        lastError = new Error(`源站网络连接失败${code}`);
+      } else lastError = err;
       if (attempt < retries) {
         await sleep(600);
       }
