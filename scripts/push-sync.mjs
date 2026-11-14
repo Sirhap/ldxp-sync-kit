@@ -485,7 +485,10 @@ export async function fetch16688Snapshot(shop, options = {}) {
   const detail = await postJson('https://www.16688.com.cn/shopApi/shop/detail', {shop_no:token}, 1, slowSourceOptions);
   const number = detail?.data?.shop_no;
   if (detail.code !== 1 || typeof number !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(number)) throw new Error('16688 店铺信息无效，保留原数据');
-  const goods = await postJson('https://www.16688.com.cn/shopApi/goods/list', {shop_no:number,sort:'default'}, 1, slowSourceOptions);
+  const categories = await postJson('https://www.16688.com.cn/shopApi/goodsCategory/list', {shop_no:number}, 1, slowSourceOptions);
+  if (categories.code !== 1 || !Array.isArray(categories.data)) throw new Error('16688 商品分类无效，保留原数据');
+  const categoryNames = new Map(categories.data.filter(c => c && typeof c.goods_category_no === 'string' && typeof c.name === 'string').map(c => [c.goods_category_no, c.name.trim()]));
+  const goods = await postJson('https://www.16688.com.cn/shopApi/goods/list', {shop_no:number,goods_category_no:'',keywords:'',sort:'default'}, 1, slowSourceOptions);
   if (goods.code !== 1 || !Array.isArray(goods.data?.list) || !goods.data.list.length) throw new Error('16688 商品列表为空或无效，保留原数据');
   const seen = new Set();
   const items = goods.data.list.slice(0,2000).map(item => {
@@ -494,7 +497,7 @@ export async function fetch16688Snapshot(shop, options = {}) {
     seen.add(key);
     const raw=item.stock_available_quantity;
     const stock=item.stock_available_status==='out' ? 0 : typeof raw==='number' && Number.isFinite(raw) && raw>=0 ? raw : null;
-    return {itemKey:key,rawName:name,shopCategory:'',price,stockCount:stock,stockStatus:stock!==null && stock<=5?'low':stock!==null && stock<=20?'normal':'sufficient',itemUrl:`https://www.16688.com.cn/goods/${encodeURIComponent(key)}`};
+    return {itemKey:key,rawName:name,shopCategory:categoryNames.get(String(item.goods_category_no || '')) || '',price,stockCount:stock,stockStatus:stock!==null && stock<=5?'low':stock!==null && stock<=20?'normal':'sufficient',itemUrl:`https://www.16688.com.cn/goods/${encodeURIComponent(key)}`};
   });
   return {shopName:String(detail.data.name || shop.shopName || '').trim(),canonicalUrl:shop.canonicalUrl || shop.shopUrl,telegram:shop.telegram || '',shopSellCount:shop.shopSellCount ?? null,salesVisible:!!shop.salesVisible,depositVisible:!!shop.depositVisible,depositMoney:shop.depositMoney ?? null,items};
 }
