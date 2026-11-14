@@ -216,7 +216,7 @@ async function postJson(url, body, retries = 1, options = {}) {
       const cookieHeader = originCookies.get(origin) || "";
       const res = await fetch(url, {
         method: "POST",
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(options.timeoutMs ?? 8000),
         headers: {
           "Content-Type": "application/json",
           Accept: "application/json",
@@ -481,10 +481,11 @@ export async function fetch16688Snapshot(shop, options = {}) {
   if (!['16688.com.cn','www.16688.com.cn'].includes(url.hostname.toLowerCase())) throw new Error('不支持的 16688 域名');
   const token = url.pathname.match(/^\/shop\/([a-zA-Z0-9_-]{1,100})\/?$/)?.[1];
   if (!token) throw new Error('16688 店铺地址无效');
-  const detail = await postJson('https://www.16688.com.cn/shopApi/shop/detail', {shop_no:token}, 1, options);
+  const slowSourceOptions = { ...options, timeoutMs: 30000 };
+  const detail = await postJson('https://www.16688.com.cn/shopApi/shop/detail', {shop_no:token}, 1, slowSourceOptions);
   const number = detail?.data?.shop_no;
   if (detail.code !== 1 || typeof number !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(number)) throw new Error('16688 店铺信息无效，保留原数据');
-  const goods = await postJson('https://www.16688.com.cn/shopApi/goods/list', {shop_no:number,sort:'default'}, 1, options);
+  const goods = await postJson('https://www.16688.com.cn/shopApi/goods/list', {shop_no:number,sort:'default'}, 1, slowSourceOptions);
   if (goods.code !== 1 || !Array.isArray(goods.data?.list) || !goods.data.list.length) throw new Error('16688 商品列表为空或无效，保留原数据');
   const seen = new Set();
   const items = goods.data.list.slice(0,2000).map(item => {

@@ -2,12 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fetch16688Snapshot } from '../scripts/push-sync.mjs';
 test('16688 采集使用店铺编号，保留缺货且不将空结果当成删除', async () => {
- const old=globalThis.fetch, calls=[];
+ const old=globalThis.fetch, oldTimeout=AbortSignal.timeout, calls=[], timeouts=[];
+ AbortSignal.timeout=(ms)=>{timeouts.push(ms); return oldTimeout(ms);};
  globalThis.fetch=async (url,opts)=>{ calls.push([url,JSON.parse(opts.body)]); return Response.json(url.endsWith('/detail') ? {code:1,data:{shop_no:'S447917',name:'测试'}} : {code:1,data:{list:[{goods_no:'a',name:'商品',price:3,stock_available_status:'out'}]}}); };
- try { const snapshot=await fetch16688Snapshot({shopUrl:'https://www.16688.com.cn/shop/S447917',shopName:'测试'},{});assert.equal(snapshot.items[0].stockCount,0);assert.equal(calls.length,2);assert.equal(calls[1][1].shop_no,'S447917');
+ try { const snapshot=await fetch16688Snapshot({shopUrl:'https://www.16688.com.cn/shop/S447917',shopName:'测试'},{});assert.equal(snapshot.items[0].stockCount,0);assert.equal(calls.length,2);assert.equal(calls[1][1].shop_no,'S447917');assert.deepEqual(timeouts,[30000,30000]);
  globalThis.fetch=async url=>Response.json(url.endsWith('/detail')?{code:1,data:{shop_no:'S447917'}}:{code:1,data:{list:[]}});
  await assert.rejects(fetch16688Snapshot({shopUrl:'https://www.16688.com.cn/shop/S447917'},{}),/保留原数据/);
- } finally {globalThis.fetch=old;}
+ } finally {globalThis.fetch=old;AbortSignal.timeout=oldTimeout;}
 });
 
 test('KA123 目录映射汇率、类别及缺货，空目录不认为可删除', async () => {
