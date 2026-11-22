@@ -378,7 +378,7 @@ export function buildShopApiSnapshot(shop, info, allGoods, apiOrigin, token) {
 
 /**
  * 判断本地采集结果是否可以跳过推送。
- * 简介变化和目标站需要的零库存观察，均不应被商品哈希跳过。
+ * 记录同步时间的服务端需要接收每次成功快照。旧版服务端仍使用哈希去重，保留简介和零库存观察。
  */
 export function shouldSkipLocalPush({
   shop,
@@ -386,8 +386,10 @@ export function shouldSkipLocalPush({
   localHash,
   descriptionPersistence,
   stockObservationSupport = false,
+  syncTimestampSupport = false,
   backfillDescription = false,
 }) {
+  if (syncTimestampSupport) return false;
   const hashMatches = Boolean(
     shop.contentHashFull &&
       shop.contentHashFull === localHash &&
@@ -498,7 +500,7 @@ export async function fetch16688Snapshot(shop, options = {}) {
   if (categories.code !== 1 || !Array.isArray(categories.data)) throw new Error('16688 商品分类无效，保留原数据');
   const categoryNames = new Map(categories.data.filter(c => c && typeof c.goods_category_no === 'string' && typeof c.name === 'string').map(c => [c.goods_category_no, c.name.trim()]));
   const goods = await postJson('https://www.16688.com.cn/shopApi/goods/list', {shop_no:number,goods_category_no:'',keywords:'',sort:'default'}, 1, slowSourceOptions);
-  if (goods.code !== 1 || !Array.isArray(goods.data?.list) || !goods.data.list.length) throw new Error('16688 商品列表为空或无效，保留原数据');
+  if (goods.code !== 1 || !Array.isArray(goods.data?.list) || (!goods.data.list.length && !options.allowEmptyMarket16688)) throw new Error('16688 商品列表为空或无效，保留原数据');
   const seen = new Set();
   const items = goods.data.list.slice(0,2000).map(item => {
     const key=String(item?.goods_no || '').trim(), name=String(item?.name || '').trim(), price=Number(item?.price);
@@ -710,7 +712,7 @@ async function main() {
   if (!shopsRes.ok) {
     throw new Error(`获取店铺列表失败: HTTP ${shopsRes.status}`);
   }
-  const { shops = [], descriptionPersistence, stockObservationSupport } = await shopsRes.json();
+  const { shops = [], descriptionPersistence, stockObservationSupport, syncTimestampSupport } = await shopsRes.json();
 
   const allTargets = shops.filter(
     (s) =>
@@ -812,6 +814,7 @@ async function main() {
             localHash,
             descriptionPersistence,
             stockObservationSupport,
+            syncTimestampSupport,
             backfillDescription,
           })
         ) {
