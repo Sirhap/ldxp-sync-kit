@@ -1,3 +1,4 @@
+import { readShopApiStock } from "../public/stock-observation.mjs";
 import { computeSnapshotHash } from "./lib/snapshotHash.mjs";
 import { readSyncConfigFile, resolveSyncTarget } from "./lib/syncTarget.mjs";
 import {
@@ -292,18 +293,6 @@ async function postJson(url, body, retries = 1, options = {}) {
   throw lastError;
 }
 
-function resolveStock(extend) {
-  const rawCount = extend?.stock_count;
-  const showType = extend?.show_stock_type;
-  if (typeof rawCount === "number" && Number.isFinite(rawCount)) {
-    if (rawCount <= 0) return { inStock: true, stockCount: 0, stockStatus: "low" };
-    const stockCount = showType === 0 ? null : rawCount;
-    const stockStatus = rawCount <= 5 ? "low" : rawCount <= 20 ? "normal" : "sufficient";
-    return { inStock: true, stockCount, stockStatus };
-  }
-  return { inStock: true, stockCount: null, stockStatus: "sufficient" };
-}
-
 /**
  * 将源站 Shop/info 与 goodsList 响应组装为标准推送快照（即使当前 0 在售商品也完整保留 description 与联系方式）
  */
@@ -315,7 +304,7 @@ export function buildShopApiSnapshot(shop, info, allGoods, apiOrigin, token) {
     const price = Number(g.price);
     const shopCategory = String(g.category?.name || g._fallbackCategoryName || "").trim();
     if (!rawName || isNonSalePlaceholderItem(rawName, shopCategory, price)) continue;
-    const stock = resolveStock(g.extend);
+    const stock = readShopApiStock(g.extend);
 
     const itemKey = String(g.goods_key || g.link || items.length + 1);
     if (seenItemKeys.has(itemKey)) continue;
@@ -487,7 +476,7 @@ export async function fetch16688Snapshot(shop, options = {}) {
   const goods = await postJson('https://www.16688.com.cn/shopApi/goods/list', {shop_no:number,goods_category_no:'',keywords:'',sort:'default'}, 1, slowSourceOptions);
   if (goods.code !== 1 || !Array.isArray(goods.data?.list) || (!goods.data.list.length && !options.allowEmptyMarket16688)) throw new Error('16688 商品列表为空或无效，保留原数据');
   const seen = new Set();
-  const items = goods.data.list.slice(0,2000).map(item => {
+  const items = goods.data.list.map(item => {
     const key=String(item?.goods_no || '').trim(), name=String(item?.name || '').trim(), price=Number(item?.price);
     if (!/^[a-zA-Z0-9_-]{1,180}$/.test(key) || !name || !Number.isFinite(price) || price<=0 || seen.has(key)) throw new Error('16688 商品字段不完整或重复，保留原数据');
     seen.add(key);

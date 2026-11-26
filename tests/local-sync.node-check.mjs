@@ -292,13 +292,33 @@ test('新轮次随机起点，断点续跑保留起点且覆盖另一半', async
   assert.deepEqual(next,['c']);assert.equal(two.resumed,2);
 });
 
-test('超限时仅向支持部分同步的服务推送前 2000 件并保留标记', async () => {
-  const checkpoint=path.join(fs.mkdtempSync(path.join(os.tmpdir(),'sync-large-')),'state.json');
-  const large={...snapshot,items:Array.from({length:2001},(_,i)=>({...snapshot.items[0],itemKey:String(i)}))};let entry;
-  const deps={load:async()=>({shops:[shops[0]],partialSnapshotSupport:true}),collect:async()=>large,push:async e=>{entry=e;return result(e.shopId);}};
-  const ok=await runSync(options(checkpoint,{apply:true}),deps);assert.equal(ok.pushed,1);assert.equal(entry.partial,true);assert.equal(entry.snapshot.items.length,2000);
-  large.items.push({...snapshot.items[0],itemKey:'extra'}); entry=null;
-  const old=await runSync(options(checkpoint,{apply:true}),{...deps,load:async()=>({shops:[shops[0]]})});assert.equal(old.failed,1);assert.equal(entry,null);
+test('单店上限与目标站协商，兼容旧站并保留超限快照的部分标记', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-large-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const checkpoint = path.join(directory, 'state.json');
+  const items = Array.from({ length: 5001 }, (_, i) => ({ ...snapshot.items[0], itemKey: String(i) }));
+  async function sync(length, capabilities) {
+    const entries = [];
+    const stats = await runSync(options(checkpoint, { apply: true }), {
+      load: async () => ({ shops: [shops[0]], ...capabilities }),
+      collect: async () => ({ ...snapshot, items: items.slice(0, length) }),
+      push: async entry => { entries.push(entry); return result(entry.shopId); },
+    });
+    return { stats, entry: entries[0] };
+  }
+  const capabilities = { maxSnapshotItems: 5000, partialSnapshotSupport: true };
+  const exact = await sync(5000, capabilities);
+  assert.equal(exact.entry.snapshot.items.length, 5000);
+  assert.equal(exact.entry.partial, undefined);
+  const oversized = await sync(5001, capabilities);
+  assert.equal(oversized.entry.snapshot.items.length, 5000);
+  assert.equal(oversized.entry.partial, true);
+  const legacy = await sync(5000, { partialSnapshotSupport: true });
+  assert.equal(legacy.entry.snapshot.items.length, 2000);
+  assert.equal(legacy.entry.partial, true);
+  const incompatible = await sync(5001, { maxSnapshotItems: 5000 });
+  assert.equal(incompatible.stats.failed, 1);
+  assert.equal(incompatible.entry, undefined);
 });
 
 test('续跑允许已删除且已完成的指定店铺缺席，未完成的缺失仍报错', async () => {
@@ -434,4 +454,41 @@ test('服务端记录同步时间时，相同哈希的正常库存也会继续�
   assert.equal(stats.pushed, 1);
   assert.equal(stats.unchanged, 0);
   assert.deepEqual(entries, [{ shopId: same.id, shopUrl: same.shopUrl, snapshot }]);
+});
+
+test('LDXP 大店只复核完整采集结果里缺失的旧报价，并保留限流后未确认的报价', async (t) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-ldxp-missing-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const checkpoint = path.join(temp, 'state.json');
+  const shop = { ...shops[0], shopUrl: 'https://pay.ldxp.cn/shop/XIAOMO' };
+  const updatedAt = '2026-11-21T02:29:40.000Z';
+  const lastSyncedAt = '2026-11-24T03:00:00.000Z';
+  const items = Array.from({ length: 2001 }, (_, i) => ({ ...snapshot.items[0], itemKey: `listing-${i}` }));
+  const keys = ['listing-0', 'listing-2000', 'delisted', 'available', 'limited', 'unchecked'];
+  const requested = [];
+  t.mock.method(globalThis, 'fetch', async (url, request) => {
+    assert.equal(url, 'https://wzyp.cn/shopApi/Shop/goodsInfo');
+    const key = JSON.parse(request.body).goods_key;
+    requested.push(key);
+    assert.equal(request.headers.Authorization, undefined);
+    if (key === 'available') return Response.json({ code: 1, data: { stock_count: 0 } });
+    assert.ok(['delisted', 'limited'].includes(key));
+    return Response.json({ code: 0, msg: '商品未上架，如有疑问请联系商家', data: null }, { status: key === 'limited' ? 429 : 200 });
+  });
+  const entries = [];
+  const stats = await runSync(options(checkpoint, { apply: true }), {
+    gate: { before: async () => {}, isBlocked: () => false },
+    load: async url => url.endsWith('?fields=sync')
+      ? { shops: [shop], partialSnapshotSupport: true, ldxpRemovalSupport: true }
+      : { shop: { id: shop.id, productItems: keys.map(key => ({ id: `${shop.id}:${key}`, updatedAt, lastSyncedAt })) } },
+    collect: async () => ({ ...snapshot, items }),
+    push: async entry => { entries.push(entry); return result(shop.id); },
+  });
+  assert.deepEqual(requested, ['delisted', 'available', 'limited']);
+  assert.equal(entries[0].snapshot.items.length, 2000);
+  assert.equal(entries[0].confirmedMissingOffers, undefined);
+  assert.equal(entries[1].snapshot.items.length, 0);
+  assert.deepEqual(entries[1].confirmedMissingOffers, [{ itemKey: 'delisted', updatedAt, lastSyncedAt }]);
+  assert.equal(stats.failed, 1);
+  assert.deepEqual(JSON.parse(fs.readFileSync(checkpoint, 'utf8')).completed, {});
 });
